@@ -12,6 +12,8 @@ let categories
 let category_groups
 let budgets
 let transactions
+let server_payees
+let flattened_transactions
 
 // mapping from Financier account types to AB account types
 let f2a_account_type_map = {
@@ -63,6 +65,39 @@ function uuid_from_financier_id(financier_id) {
     let n = financier_id.lastIndexOf("_");
     uuid = financier_id.substring(n + 1);
     return uuid;
+}
+
+function set_transfer_payee(trans) {
+    if ("transfer_id" in trans) {
+        // find matching transaction for other side of transaction
+        let matching_trans = flattened_transactions.filter((t) => t.id == trans.transfer_id)[0];
+        
+        // if matching_trans is a subtransaction, it will have an "_account" id
+        // rather than "account"
+
+        // get actual account ID for the account in the matching transaction
+        // via its financier ID
+        let new_account_id = f2a_id_mappings[
+            "account" in matching_trans ? 
+                matching_trans.account : 
+                matching_trans._account
+        ];
+
+        // if we didn't find it, that's because matching_trans.account
+        // has already been mapped from financier ID to actual ID, so just
+        // use the ID as is (since it's already an actual)
+        if (new_account_id == undefined) {
+            new_account_id = matching_trans.account
+        }
+        // get the payee for this "transfer_acct"
+        let transfer_payee = server_payees.filter((p) => p.transfer_acct == new_account_id)[0];
+        
+        // set the transaction's payee to the right ID
+        trans.payee = transfer_payee.id;
+    }
+
+    return trans;
+
 }
 
 
@@ -267,7 +302,6 @@ async function add_categories() {
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(categories.length, 0);
     for (cat of categories) {
-        // need to update group_id with new category group id:
         cat.group_id = f2a_id_mappings[cat.group_id]
         let id = await api.createCategory(cat);
         f2a_id_mappings[cat.id] = id;
@@ -275,6 +309,11 @@ async function add_categories() {
         bar.increment();
     }
     bar.stop();
+    categories = await api.getCategories();
+    
+    // explicitly add income category mapping from server since
+    // it isn't included in the above loop
+    f2a_id_mappings['income'] = categories.filter((data) => data.name == "Income")[0].id
     return categories;
 }
 
@@ -296,15 +335,22 @@ async function add_transactions() {
     console.log("adding transactions");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(transactions.length, 0);
-
-    /* 
-    Will need to use addTransactions(accountId, Transaction[]) per account
-    https://actualbudget.org/docs/api/reference#transactions
-    */
+    flattened_transactions = transactions.slice();
+    for (trans of transactions) {
+        // add account information to each subtransaction and push the subtransactions
+        // into the flattened_transactions array so we can search across all
+        // transactions including splits when looking for transfer matches
+        if ("subtransactions" in trans) {
+            trans.subtransactions.map((st) => {
+                st._account = trans.account
+            })
+            flattened_transactions.push(...trans.subtransactions)
+        }
+    }
 
     for (trans of transactions) {
         // for each transaction, need to update payee, category, account
-        // and splits
+        // and splits with proper "actual ID" values rather than financier
         if ("account" in trans) {
             trans.account = f2a_id_mappings[trans.account];
         }
@@ -314,6 +360,9 @@ async function add_transactions() {
         if ("category" in trans) {
             trans.category = f2a_id_mappings[trans.category];
         }
+        
+        trans = set_transfer_payee(trans);
+
         if ("subtransactions" in trans) {
             // need to update category and payee for each sub transaction
             trans.subtransactions = trans.subtransactions.map((trans) => {
@@ -323,6 +372,7 @@ async function add_transactions() {
                 if ("category" in trans) {
                     trans.category = f2a_id_mappings[trans.category];
                 }
+                trans = set_transfer_payee(trans);
                 return trans;
             })
         }
@@ -356,9 +406,8 @@ async function add_transactions() {
     // payees
     payees = map_payees();
 
-    // TODO: transactions
-    // this is partially working; values are correct, but transfers are not being
-    // correctly associated.
+    // transactions
+    // Nov 24, 2023: appears to be working with splits, transfers, and income
     transactions = map_transactions();
     
     // TODO: budgets
@@ -367,9 +416,10 @@ async function add_transactions() {
     await api.runImport(`${now.toDateString().substring(4).replaceAll(' ', '')}.${now.toTimeString().substring(0,8).replaceAll(':', '')}`,
         async () => {
             accounts  = await add_accounts(); // also adds "id" parameter to accounts
-            category_groups = await add_category_groups();
-            categories = await add_categories();
+            category_groups = await add_category_groups(); 
+            categories = await add_categories();            
             payees = await add_payees();
+            server_payees = await api.getPayees();
 
             transactions = await add_transactions();
 
