@@ -301,7 +301,7 @@ async function add_categories() {
     console.log("adding categories");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(categories.length, 0);
-    for (cat of categories) {
+    for (cat of categories.slice().reverse()) {
         cat.group_id = f2a_id_mappings[cat.group_id]
         let id = await api.createCategory(cat);
         f2a_id_mappings[cat.id] = id;
@@ -384,6 +384,40 @@ async function add_transactions() {
 
 }
 
+async function proc_budget_months() {
+    function _extract_data(m_category) {
+        // pulls out the month and financier category id from the "_id" value
+        // of the financier data; returns month, financier category, and corresponding 
+        // actual category
+        let regexp = /b_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_m_category_([0-9]{4}-[0-9]{2})-[0-9]{2}_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/;
+        let month = m_category.match(regexp)[1];
+        let category_uuid = m_category.match(regexp)[2];
+        return [month, category_uuid, f2a_id_mappings[category_uuid]]
+    }
+
+    console.log("processing budget amounts");
+    const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
+
+    // month categories have "_m_category_" in their _id parameter
+    let month_categories = financier_data.filter((data) => data._id.includes('_m_category_'));
+    bar.start(month_categories.length, 0);
+    for (mc of month_categories) {
+        // loop through, extract values, and make actual API calls to set budget values
+        let month, financier_category, actual_category;
+        [month, financier_category, actual_category] = _extract_data(mc._id);
+        let value = mc.budget;
+        let carryover = mc.overspending == true;
+
+        // these two API methods set budget information
+        // setBudgetAmount(month month, id categoryId, amount value) → Promise<null>
+        // setBudgetCarryover(month month, id categoryId, bool flag) → Promise<null>
+        await api.setBudgetAmount(month, actual_category, value);
+        await api.setBudgetCarryover(month, actual_category, carryover);
+        bar.increment();
+    }
+    bar.stop();
+}
+
 (async () => {
     await api.init({
         // Budget data will be cached locally here, in subdirectories for each file.
@@ -410,8 +444,12 @@ async function add_transactions() {
     // Nov 24, 2023: appears to be working with splits, transfers, and income
     transactions = map_transactions();
     
-    // TODO: budgets
-    // let AB_budgets = map_budgets(data);
+    // budgets (done in runImport function)
+
+    // TODO:split income transactions not associating correctly
+
+    // TODO:Monthly Interest not getting a category set
+
     let now = new Date()
     await api.runImport(`${now.toDateString().substring(4).replaceAll(' ', '')}.${now.toTimeString().substring(0,8).replaceAll(':', '')}`,
         async () => {
@@ -420,10 +458,8 @@ async function add_transactions() {
             categories = await add_categories();            
             payees = await add_payees();
             server_payees = await api.getPayees();
-
             transactions = await add_transactions();
-
-            console.log();
+            budgets = await proc_budget_months();
         }
     )
 
