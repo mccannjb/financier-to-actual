@@ -5,6 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 
 let api = require('@actual-app/api');
 let financier_data = require(process.env.FINANCIER_JSON);
+let budget_name = financier_data.filter((data) => "name" in data && "hints" in data)[0].name
 
 let accounts
 let payees
@@ -311,9 +312,10 @@ async function add_categories() {
     bar.stop();
     categories = await api.getCategories();
     
-    // explicitly add income category mapping from server since
-    // it isn't included in the above loop
+    // explicitly add income category mappings from server since
+    // they are not included in the above loop
     f2a_id_mappings['income'] = categories.filter((data) => data.name == "Income")[0].id
+    f2a_id_mappings['incomeNextMonth'] = f2a_id_mappings['income']
     return categories;
 }
 
@@ -450,8 +452,7 @@ async function proc_budget_months() {
 
     // TODO:Monthly Interest not getting a category set
 
-    let now = new Date()
-    await api.runImport(`${now.toDateString().substring(4).replaceAll(' ', '')}.${now.toTimeString().substring(0,8).replaceAll(':', '')}`,
+    await api.runImport(budget_name,
         async () => {
             accounts  = await add_accounts(); // also adds "id" parameter to accounts
             category_groups = await add_category_groups(); 

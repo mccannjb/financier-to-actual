@@ -2,3 +2,9 @@ node_modules
 new-budget*
 .env
 Our*.json
+Test*.json
+Reduced*.json
+*.ods
+*.json
+tmp*
+*.md
