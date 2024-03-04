@@ -1,10 +1,84 @@
-require('dotenv').config()
+#!/usr/bin/env node
+
+const { program } = require('commander');
 const cliProgress = require('cli-progress');
 const fs = require('fs')
-const { v4: uuidv4 } = require('uuid');
+
+program
+    .name('financier-to-actual')
+    .description(`Tool to import a Financier budget to Actual Budget. 
+    
+    The options below must be provided on the command line, or passed through
+    the environment using the environment variables specified. These can be 
+    defined in a '.env' file that will be read at the time the command is run
+    for convenience. If both environment variables and command line flags are set,
+    the CLI flags will take precedence. (A '.env' file will override any existing
+    environment variable definitions)`)
+    .version('0.0.1')
+    .option('--url <url>', 'The URL for the actual server (e.g. "https://actual.myhost.com") (env: ACTUAL_URL)')
+    .option('--password <password>', 'The password for the actual server (env: ACTUAL_PASSWORD)')
+    .option('--json <path_to_json>', 'The path to the Financier JSON export (env: FINANCIER_JSON)');
+
+program.parse();
+
+require('dotenv').config()
+
+// parse environment and command line options
+missing_options = [];
+let ACTUAL_URL, ACTUAL_PASSWORD, FINANCIER_JSON, url_source, password_source, json_source;
+
+if (process.env.ACTUAL_URL !== undefined) {
+    ACTUAL_URL = process.env.ACTUAL_URL;
+    url_source = 'environment';
+}
+if (program.opts().url !== undefined) {
+    ACTUAL_URL = program.opts().url;
+    url_source = 'cli';
+}
+if (ACTUAL_URL === undefined) missing_options.push('url');
+if (process.env.ACTUAL_PASSWORD !== undefined) {
+    ACTUAL_PASSWORD = process.env.ACTUAL_PASSWORD;
+    password_source = 'environment'
+}
+if (program.opts().password !== undefined) {
+    ACTUAL_PASSWORD = program.opts().password;
+    password_source = 'cli';
+}
+if (ACTUAL_PASSWORD === undefined) missing_options.push('password');
+if (process.env.FINANCIER_JSON !== undefined) {
+    FINANCIER_JSON = process.env.FINANCIER_JSON;
+    json_source = 'environment';
+}
+if (program.opts().json !== undefined) {
+    FINANCIER_JSON = program.opts().json;
+    json_source = 'cli';
+}
+if (FINANCIER_JSON === undefined) missing_options.push('json');
+
+if (missing_options.length > 0){
+    console.error(`The following options were missing from the program input: 
+    
+    ${missing_options}
+
+Please check the help below and provide them.
+`);
+    program.help();
+}
+
+console.log(`Using the following settings:
+         ACTUAL_URL: ${ACTUAL_URL} (source: ${url_source})
+    ACTUAL_PASSWORD: ${ACTUAL_PASSWORD} (source: ${password_source})
+     FINANCIER_JSON: ${FINANCIER_JSON} (source: ${json_source})
+`);
+
+// check the JSON file exists
+if ( ! fs.existsSync(FINANCIER_JSON)) {
+    console.error(`Could not open JSON file "${FINANCIER_JSON}". Please double check it exists.`)
+    process.exit(1);
+}
 
 let api = require('@actual-app/api');
-let financier_data = require(process.env.FINANCIER_JSON);
+let financier_data = require(FINANCIER_JSON);
 let budget_name = financier_data.filter((data) => "name" in data && "hints" in data)[0].name
 
 let accounts
@@ -425,9 +499,9 @@ async function proc_budget_months() {
         // Budget data will be cached locally here, in subdirectories for each file.
         dataDir: '.',
         // This is the URL of your running server
-        serverURL: process.env.ACTUAL_URL,
+        serverURL: ACTUAL_URL,
         // This is the password you use to log into the server
-        password: process.env.ACTUAL_PASSWORD,
+        password: ACTUAL_PASSWORD,
     });
 
     // accounts
