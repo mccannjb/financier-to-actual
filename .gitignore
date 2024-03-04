@@ -6,6 +6,8 @@ Test*.json
 Reduced*.json
 *.ods
 *.json
-tmp*
 *.md
+tmp*
+!README.md
+!LICENSE.md
 dl.js
