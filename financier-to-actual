@@ -6,14 +6,27 @@ const fs = require('fs')
 
 program
     .name('financier-to-actual')
-    .description(`Tool to import a Financier budget to Actual Budget. 
+    .description(`A tool to import a Financier budget to Actual Budget. 
     
     The options below must be provided on the command line, or passed through
     the environment using the environment variables specified. These can be 
     defined in a '.env' file that will be read at the time the command is run
     for convenience. If both environment variables and command line flags are set,
     the CLI flags will take precedence. (A '.env' file will override any existing
-    environment variable definitions)`)
+    environment variable definitions)
+    
+    Please note: there is currently no way via the Actual API to specify that income
+    should be "held" for the next month, so if your Financier budget assigns income
+    to the next month (like how YNAB recommended and described here:
+    https://actualbudget.org/docs/getting-started/starting-clean/#the-month-ahead-method),
+    then after the import you will need to manually hold the extra each month going
+    back through the budget's history. If you don't do this, it will appear
+    that each month has extra "To budget", so it won't match up exactly with
+    what is shown in Financier. This is just a display issue and doesn't affect the
+    actual budget amounts as far as I understand. Unfortunately, there's nothing that
+    can be done about this on the import side because it is  a limitation
+    based on how I understand the API to work at this point (see 
+    https://github.com/actualbudget/actual/issues/1982)`)
     .version('0.0.1')
     .option('--url <url>', 'The URL for the actual server (e.g. "https://actual.myhost.com") (env: ACTUAL_URL)')
     .option('--password <password>', 'The password for the actual server (env: ACTUAL_PASSWORD)')
@@ -78,7 +91,10 @@ if ( ! fs.existsSync(FINANCIER_JSON)) {
 }
 
 let api = require('@actual-app/api');
-let financier_data = require(FINANCIER_JSON);
+
+// strip BOM from UTF-8 JSON file and parse into JS array:
+let financier_data = fs.readFileSync(FINANCIER_JSON, 'utf-8').replace(/^\uFEFF/, '');
+financier_data = JSON.parse(financier_data);
 let budget_name = financier_data.filter((data) => "name" in data && "hints" in data)[0].name
 
 let accounts
@@ -104,37 +120,6 @@ let f2a_account_type_map = {
 // keys in this object should be financier IDs, and their values
 // should be the new IDs they get from actual when calling "createXXX()"
 let f2a_id_mappings = {};
-
-function get_id_by_financier_id(array, financier_id) {
-    let match = array.filter((data) => data.financier_id == financier_id)
-    if (match.length < 1) {
-        console.error(`Did not find ${financier_id} in array`)
-        return null
-    }
-    else {
-        return match[0].id
-    }
-}
-
-function write_json(json_data, filename) {
-    const data = JSON.stringify(json_data)
-
-    // write JSON string to a file
-    try {
-        fs.writeFileSync(filename, data)
-        console.log('JSON data is saved.')
-    } catch (err) {
-        console.error(err)
-    }
-}
-
-function read_json(filename) {
-    try {
-        let data = fs.readFileSync(filename)
-    } catch (err) {
-        console.error(err)
-    }
-}
 
 function uuid_from_financier_id(financier_id) {
     let n = financier_id.lastIndexOf("_");
@@ -174,7 +159,6 @@ function set_transfer_payee(trans) {
     return trans;
 
 }
-
 
 // financier             actual
 // master category <-> category group
@@ -345,7 +329,7 @@ function map_transactions() {
 }
 
 async function add_accounts() {
-    console.log("adding accounts to budget")
+    console.log("(Step 1/6) adding accounts to budget")
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(accounts.length, 0);
     for (account of accounts) {
@@ -359,7 +343,7 @@ async function add_accounts() {
 }
 
 async function add_category_groups() {
-    console.log("adding category groups");
+    console.log("(Step 2/6) adding category groups");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(category_groups.length, 0);
     for (cat_group of category_groups) {
@@ -373,7 +357,7 @@ async function add_category_groups() {
 }
 
 async function add_categories() {
-    console.log("adding categories");
+    console.log("(Step 3/6) adding categories");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(categories.length, 0);
     for (cat of categories.slice().reverse()) {
@@ -394,7 +378,7 @@ async function add_categories() {
 }
 
 async function add_payees() {
-    console.log("adding payees");
+    console.log("(Step 4/6) adding payees");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(payees.length, 0);
     for (payee of payees) {
@@ -408,7 +392,7 @@ async function add_payees() {
 }
 
 async function add_transactions() {
-    console.log("adding transactions");
+    console.log("(Step 5/6) adding transactions");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(transactions.length, 0);
     flattened_transactions = transactions.slice();
@@ -471,7 +455,7 @@ async function proc_budget_months() {
         return [month, category_uuid, f2a_id_mappings[category_uuid]]
     }
 
-    console.log("processing budget amounts");
+    console.log("(Step 6/6) processing budget amounts");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
 
     // month categories have "_m_category_" in their _id parameter
@@ -495,6 +479,7 @@ async function proc_budget_months() {
 }
 
 (async () => {
+    console.log("Initializing API client")
     await api.init({
         // Budget data will be cached locally here, in subdirectories for each file.
         dataDir: '.',
@@ -517,15 +502,12 @@ async function proc_budget_months() {
     payees = map_payees();
 
     // transactions
-    // Nov 24, 2023: appears to be working with splits, transfers, and income
     transactions = map_transactions();
     
     // budgets (done in runImport function)
 
-    // TODO:split income transactions not associating correctly
-
-    // TODO:Monthly Interest not getting a category set
-
+    // run actual import
+    console.log("Running actual import")
     await api.runImport(budget_name,
         async () => {
             accounts  = await add_accounts(); // also adds "id" parameter to accounts
