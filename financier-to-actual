@@ -225,6 +225,22 @@ function map_payees() {
     return AB_payees
 }
 
+// Helper function to convert hex color codes to readable names
+function getColorNameFromHex(hexCode) {
+    if (!hexCode) return null;
+    
+    const colorMap = {
+        "#faa710": "Orange",
+        "#76b852": "Green",
+        "#e5e500": "Yellow",
+        "#5276b8": "Blue",
+        "#ff0000": "Red",
+        "#b852a9": "Purple"
+    };
+    
+    return colorMap[hexCode] || "Colored";
+}
+
 function map_single_transaction(transaction, type) {
     /* 
     `type` should be either "main" or "split"
@@ -277,11 +293,19 @@ function map_single_transaction(transaction, type) {
         financier_id = transaction["id"];
     }
 
+    // Process flag if present
+    let notes = transaction["memo"];
+    if (transaction["flag"]) {
+        const colorName = getColorNameFromHex(transaction["flag"]);
+        // Prepend the flag information to the notes
+        notes = `[${colorName} Flag] ${notes || ""}`;
+    }
+
     res = {
         "id": financier_id,
         "amount": transaction['value'],
         "date": transaction['date'],
-        "notes": transaction["memo"],
+        "notes": notes,
         "cleared": transaction["cleared"],
         // "financier_account": transaction["account"],
         // "financier_category": transaction["category"],
