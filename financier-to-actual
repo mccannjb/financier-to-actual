@@ -444,61 +444,6 @@ async function add_transactions() {
 
 }
 
-async function process_month_ahead() {
-    console.log("(Step 7/7) processing month-ahead budgeting");
-    
-    // Get all transactions
-    const transactions = financier_data.filter((data) => data._id.includes('_transaction_'));
-    
-    // Group transactions by month (using YYYY-MM format from date field)
-    const transactionsByMonth = {};
-    
-    for (const trans of transactions) {
-        if (trans.category === 'incomeNextMonth') {
-            // Extract YYYY-MM from transaction date (format: YYYY-MM-DD)
-            const month = trans.date.substring(0, 7);
-            
-            if (!transactionsByMonth[month]) {
-                transactionsByMonth[month] = [];
-            }
-            
-            transactionsByMonth[month].push(trans);
-        }
-    }
-    
-    // Sort months chronologically
-    const months = Object.keys(transactionsByMonth).sort();
-    
-    if (months.length === 0) {
-        console.log("No 'incomeNextMonth' transactions found. Skipping month-ahead processing.");
-        return;
-    }
-    
-    console.log(`Found 'incomeNextMonth' transactions in ${months.length} month(s): ${months.join(', ')}`);
-    
-    // Process each month
-    const monthAheadBar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
-    monthAheadBar.start(months.length, 0);
-    
-    for (const month of months) {
-        // Sum the values of incomeNextMonth transactions for this month
-        let incomeNextMonthTotal = 0;
-        for (const trans of transactionsByMonth[month]) {
-            incomeNextMonthTotal += trans.value;
-        }
-        
-        // If there's income to hold for next month, call the API
-        if (incomeNextMonthTotal > 0) {
-            await api.holdBudgetForNextMonth(month, incomeNextMonthTotal);
-        }
-        
-        monthAheadBar.increment();
-    }
-    
-    monthAheadBar.stop();
-    console.log("Month-ahead budgeting completed.");
-}
-
 async function proc_budget_months() {
     function _extract_data(m_category) {
         // pulls out the month and financier category id from the "_id" value
@@ -531,9 +476,71 @@ async function proc_budget_months() {
         bar.increment();
     }
     bar.stop();
+}
 
-    // handle month-ahead entries
-    await process_month_ahead();
+async function generate_month_ahead_report() {
+    console.log("Generating month-ahead report...");
+    
+    // Get all transactions with incomeNextMonth category
+    const incomeNextMonthTransactions = financier_data.filter(
+        (data) => data._id.includes('_transaction_') && data.category === 'incomeNextMonth'
+    );
+    
+    if (incomeNextMonthTransactions.length === 0) {
+        console.log("No 'incomeNextMonth' transactions found. No report needed.");
+        return;
+    }
+    
+    // Group transactions by month
+    const transactionsByMonth = {};
+    for (const trans of incomeNextMonthTransactions) {
+        const month = trans.date.substring(0, 7); // Extract YYYY-MM
+        if (!transactionsByMonth[month]) {
+            transactionsByMonth[month] = [];
+        }
+        transactionsByMonth[month].push(trans);
+    }
+    
+    // Get all months and sort them chronologically
+    const months = Object.keys(transactionsByMonth).sort();
+    console.log(`Found 'incomeNextMonth' transactions in ${months.length} month(s): ${months.join(', ')}`);
+    
+    // Create the report content
+    let reportContent = "# Month-Ahead Budget Report\n\n";
+    reportContent += "This report shows how much you need to 'Hold for next month' in Actual Budget for each month.\n\n";
+    reportContent += "| Month | Amount to Hold (cents) | Amount to Hold (dollars) | Transactions |\n";
+    reportContent += "|-------|------------------------|--------------------------|-------------|\n";
+    
+    // Process each month in chronological order
+    for (const month of months) {
+        // Calculate total income for next month
+        let totalAmount = 0;
+        let transactionDetails = [];
+        
+        for (const trans of transactionsByMonth[month]) {
+            totalAmount += trans.value;
+            // Add transaction details
+            transactionDetails.push(`${trans.date}: ${trans.value/100} (${trans.memo || 'No memo'})`);
+        }
+        
+        // Add to report
+        reportContent += `| ${month} | ${totalAmount} | ${(totalAmount/100).toFixed(2)} | ${transactionDetails.join(', ')} |\n`;
+    }
+    
+    // Add instructions
+    reportContent += "\n\n## How to Use This Report\n\n";
+    reportContent += "1. In Actual Budget, navigate to each month listed above\n";
+    reportContent += "2. Click on the 'To Budget' amount\n";
+    reportContent += "3. Select 'Hold for next month'\n";
+    reportContent += "4. Enter the dollar amount shown in the 'Amount to Hold (dollars)' column\n";
+    reportContent += "5. Click 'Hold'\n";
+    
+    // Write to file
+    const reportFileName = "month_ahead_report.md";
+    fs.writeFileSync(reportFileName, reportContent);
+    
+    console.log(`Month-ahead report generated: ${reportFileName}`);
+    return reportFileName;
 }
 
 (async () => {
@@ -576,7 +583,9 @@ async function proc_budget_months() {
             transactions = await add_transactions();
             budgets = await proc_budget_months();
         }
-    )
+    );
+
+    await generate_month_ahead_report();
 
     await api.shutdown();
   })();
