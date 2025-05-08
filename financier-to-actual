@@ -353,7 +353,7 @@ function map_transactions() {
 }
 
 async function add_accounts() {
-    console.log("(Step 1/6) adding accounts to budget")
+    console.log("(Step 1/7) adding accounts to budget")
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(accounts.length, 0);
     for (account of accounts) {
@@ -367,7 +367,7 @@ async function add_accounts() {
 }
 
 async function add_category_groups() {
-    console.log("(Step 2/6) adding category groups");
+    console.log("(Step 2/7) adding category groups");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(category_groups.length, 0);
     for (cat_group of category_groups) {
@@ -381,7 +381,7 @@ async function add_category_groups() {
 }
 
 async function add_categories() {
-    console.log("(Step 3/6) adding categories");
+    console.log("(Step 3/7) adding categories");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(categories.length, 0);
     for (cat of categories.slice().reverse()) {
@@ -402,7 +402,7 @@ async function add_categories() {
 }
 
 async function add_payees() {
-    console.log("(Step 4/6) adding payees");
+    console.log("(Step 4/7) adding payees");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(payees.length, 0);
     for (payee of payees) {
@@ -416,7 +416,7 @@ async function add_payees() {
 }
 
 async function add_transactions() {
-    console.log("(Step 5/6) adding transactions");
+    console.log("(Step 5/7) adding transactions");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(transactions.length, 0);
     flattened_transactions = transactions.slice();
@@ -479,7 +479,7 @@ async function proc_budget_months() {
         return [month, category_uuid, f2a_id_mappings[category_uuid]]
     }
 
-    console.log("(Step 6/6) processing budget amounts");
+    console.log("(Step 6/7) processing budget amounts");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
 
     // month categories have "_m_category_" in their _id parameter
@@ -500,6 +500,71 @@ async function proc_budget_months() {
         bar.increment();
     }
     bar.stop();
+}
+
+async function generate_month_ahead_report() {
+    console.log("Generating month-ahead report...");
+    
+    // Get all transactions with incomeNextMonth category
+    const incomeNextMonthTransactions = financier_data.filter(
+        (data) => data._id.includes('_transaction_') && data.category === 'incomeNextMonth'
+    );
+    
+    if (incomeNextMonthTransactions.length === 0) {
+        console.log("No 'incomeNextMonth' transactions found. No report needed.");
+        return;
+    }
+    
+    // Group transactions by month
+    const transactionsByMonth = {};
+    for (const trans of incomeNextMonthTransactions) {
+        const month = trans.date.substring(0, 7); // Extract YYYY-MM
+        if (!transactionsByMonth[month]) {
+            transactionsByMonth[month] = [];
+        }
+        transactionsByMonth[month].push(trans);
+    }
+    
+    // Get all months and sort them chronologically
+    const months = Object.keys(transactionsByMonth).sort();
+    console.log(`Found 'incomeNextMonth' transactions in ${months.length} month(s): ${months.join(', ')}`);
+    
+    // Create the report content
+    let reportContent = "# Month-Ahead Budget Report\n\n";
+    reportContent += "This report shows how much you need to 'Hold for next month' in Actual Budget for each month.\n\n";
+    reportContent += "| Month | Amount to Hold (cents) | Amount to Hold (dollars) | Transactions |\n";
+    reportContent += "|-------|------------------------|--------------------------|-------------|\n";
+    
+    // Process each month in chronological order
+    for (const month of months) {
+        // Calculate total income for next month
+        let totalAmount = 0;
+        let transactionDetails = [];
+        
+        for (const trans of transactionsByMonth[month]) {
+            totalAmount += trans.value;
+            // Add transaction details
+            transactionDetails.push(`${trans.date}: ${trans.value/100} (${trans.memo || 'No memo'})`);
+        }
+        
+        // Add to report
+        reportContent += `| ${month} | ${totalAmount} | ${(totalAmount/100).toFixed(2)} | ${transactionDetails.join(', ')} |\n`;
+    }
+    
+    // Add instructions
+    reportContent += "\n\n## How to Use This Report\n\n";
+    reportContent += "1. In Actual Budget, navigate to each month listed above\n";
+    reportContent += "2. Click on the 'To Budget' amount\n";
+    reportContent += "3. Select 'Hold for next month'\n";
+    reportContent += "4. Enter the dollar amount shown in the 'Amount to Hold (dollars)' column\n";
+    reportContent += "5. Click 'Hold'\n";
+    
+    // Write to file
+    const reportFileName = "month_ahead_report.md";
+    fs.writeFileSync(reportFileName, reportContent);
+    
+    console.log(`Month-ahead report generated: ${reportFileName}`);
+    return reportFileName;
 }
 
 (async () => {
@@ -542,7 +607,9 @@ async function proc_budget_months() {
             transactions = await add_transactions();
             budgets = await proc_budget_months();
         }
-    )
+    );
+
+    await generate_month_ahead_report();
 
     await api.shutdown();
   })();
