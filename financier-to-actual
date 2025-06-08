@@ -301,10 +301,19 @@ function map_single_transaction(transaction, type) {
         notes = `[${colorName} Flag] ${notes || ""}`;
     }
 
+    // Format the date to ensure it's in YYYY-MM-DD format
+    let formattedDate = transaction['date'];
+    if (formattedDate && typeof formattedDate === 'string') {
+        // If date contains time information (has a 'T'), extract just the date part
+        if (formattedDate.includes('T')) {
+            formattedDate = formattedDate.split('T')[0];
+        }
+    }
+
     res = {
         "id": financier_id,
         "amount": transaction['value'],
-        "date": transaction['date'],
+        "date": formattedDate,
         "notes": notes,
         "cleared": transaction["cleared"],
         // "financier_account": transaction["account"],
@@ -385,10 +394,14 @@ async function add_categories() {
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(categories.length, 0);
     for (cat of categories.slice().reverse()) {
-        cat.group_id = f2a_id_mappings[cat.group_id]
-        let id = await api.createCategory(cat);
-        f2a_id_mappings[cat.id] = id;
-        cat.id = id;
+        try{
+            cat.group_id = f2a_id_mappings[cat.group_id]
+            let id = await api.createCategory(cat);
+            f2a_id_mappings[cat.id] = id;
+            cat.id = id;
+        } catch(error) {
+            console.error("Error with category", cat)
+        }
         bar.increment();
     }
     bar.stop();
@@ -470,13 +483,19 @@ async function add_transactions() {
 
 async function proc_budget_months() {
     function _extract_data(m_category) {
-        // pulls out the month and financier category id from the "_id" value
-        // of the financier data; returns month, financier category, and corresponding 
-        // actual category
-        let regexp = /b_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_m_category_([0-9]{4}-[0-9]{2})-[0-9]{2}_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/;
-        let month = m_category.match(regexp)[1];
-        let category_uuid = m_category.match(regexp)[2];
-        return [month, category_uuid, f2a_id_mappings[category_uuid]]
+        // Updated more flexible regex that works with both formats
+        let regexp = /b_.*?_m_category_([0-9]{4}-[0-9]{2})-[0-9]{2}_(.*)/;
+        
+        const match = m_category.match(regexp);
+        if (!match) {
+            console.error(`Failed to match pattern for: ${m_category}`);
+            return [null, null, null];
+        }
+        
+        let month = match[1];
+        let category_uuid = match[2];
+        
+        return [month, category_uuid, f2a_id_mappings[category_uuid]];
     }
 
     console.log("(Step 6/7) processing budget amounts");
@@ -489,14 +508,24 @@ async function proc_budget_months() {
         // loop through, extract values, and make actual API calls to set budget values
         let month, financier_category, actual_category;
         [month, financier_category, actual_category] = _extract_data(mc._id);
+        
+        // Skip if we couldn't extract the data properly
+        if (!month || !financier_category || !actual_category) {
+            console.warn(`Skipping budget entry with ID: ${mc._id} - could not extract required information`);
+            bar.increment();
+            continue;
+        }
+        
         let value = mc.budget;
         let carryover = mc.overspending == true;
 
         // these two API methods set budget information
-        // setBudgetAmount(month month, id categoryId, amount value) → Promise<null>
-        // setBudgetCarryover(month month, id categoryId, bool flag) → Promise<null>
-        await api.setBudgetAmount(month, actual_category, value);
-        await api.setBudgetCarryover(month, actual_category, carryover);
+        try {
+            await api.setBudgetAmount(month, actual_category, value);
+            await api.setBudgetCarryover(month, actual_category, carryover);
+        } catch (error) {
+            console.error(`Error setting budget for ${month}, category ${financier_category}: ${error.message}`);
+        }
         bar.increment();
     }
     bar.stop();
@@ -515,6 +544,9 @@ async function generate_month_ahead_report() {
         return;
     }
     
+    // Get budget months from Actual to compare
+    const actualBudgetMonths = await api.getBudgetMonths();
+    
     // Group transactions by month
     const transactionsByMonth = {};
     for (const trans of incomeNextMonthTransactions) {
@@ -532,10 +564,12 @@ async function generate_month_ahead_report() {
     // Create the report content
     let reportContent = "# Month-Ahead Budget Report\n\n";
     reportContent += "This report shows how much you need to 'Hold for next month' in Actual Budget for each month.\n\n";
-    reportContent += "| Month | Amount to Hold (cents) | Amount to Hold (dollars) | Transactions |\n";
-    reportContent += "|-------|------------------------|--------------------------|-------------|\n";
+    reportContent += "| Month | Amount to Hold (cents) | Amount to Hold (dollars) | Expected To Budget | Actual To Budget | Difference | Transactions |\n";
+    reportContent += "|-------|------------------------|--------------------------|-------------------|-----------------|------------|-------------|\n";
     
     // Process each month in chronological order
+    let cumulativeDifference = 0;
+    
     for (const month of months) {
         // Calculate total income for next month
         let totalAmount = 0;
@@ -547,17 +581,37 @@ async function generate_month_ahead_report() {
             transactionDetails.push(`${trans.date}: ${trans.value/100} (${trans.memo || 'No memo'})`);
         }
         
-        // Add to report
-        reportContent += `| ${month} | ${totalAmount} | ${(totalAmount/100).toFixed(2)} | ${transactionDetails.join(', ')} |\n`;
+        // Try to fetch the budget month from Actual
+        let actualToBudget = "N/A";
+        try {
+            if (actualBudgetMonths.includes(month)) {
+                const budgetMonth = await api.getBudgetMonth(month);
+                actualToBudget = budgetMonth.toBudget || 0;
+                cumulativeDifference += totalAmount - actualToBudget;
+            }
+        } catch (error) {
+            console.log(`Error fetching budget month ${month}: ${error.message}`);
+        }
+        
+        // Add to report with comparison
+        reportContent += `| ${month} | ${totalAmount} | ${(totalAmount/100).toFixed(2)} | ${(totalAmount/100).toFixed(2)} | ${actualToBudget !== "N/A" ? (actualToBudget/100).toFixed(2) : "N/A"} | ${actualToBudget !== "N/A" ? ((totalAmount - actualToBudget)/100).toFixed(2) : "N/A"} | ${transactionDetails.join(', ')} |\n`;
     }
     
-    // Add instructions
-    reportContent += "\n\n## How to Use This Report\n\n";
+    // Add instructions and analysis
+    reportContent += "\n\n## Analysis\n\n";
+    reportContent += `The cumulative difference between expected and actual "To Budget" amounts is: ${(cumulativeDifference/100).toFixed(2)}\n\n`;
+    reportContent += "This difference could be due to:\n";
+    reportContent += "1. Overspending that was carried forward differently in Financier vs. Actual\n";
+    reportContent += "2. Different handling of income categorization\n";
+    reportContent += "3. Differences in how budget allocations and adjustments are calculated\n\n";
+    
+    reportContent += "## How to Fix Your Budget\n\n";
     reportContent += "1. In Actual Budget, navigate to each month listed above\n";
     reportContent += "2. Click on the 'To Budget' amount\n";
     reportContent += "3. Select 'Hold for next month'\n";
     reportContent += "4. Enter the dollar amount shown in the 'Amount to Hold (dollars)' column\n";
     reportContent += "5. Click 'Hold'\n";
+    reportContent += "6. After applying these changes, your Actual Budget should more closely match what you had in Financier\n";
     
     // Write to file
     const reportFileName = "month_ahead_report.md";
@@ -565,6 +619,59 @@ async function generate_month_ahead_report() {
     
     console.log(`Month-ahead report generated: ${reportFileName}`);
     return reportFileName;
+}
+
+async function applyMonthAheadBudgeting() {
+    console.log("Applying 'Hold for next month' to each budget month...");
+    
+    // Get all transactions with incomeNextMonth category
+    const incomeNextMonthTransactions = financier_data.filter(
+        (data) => data._id.includes('_transaction_') && data.category === 'incomeNextMonth'
+    );
+    
+    if (incomeNextMonthTransactions.length === 0) {
+        console.log("No 'incomeNextMonth' transactions found. Skipping budget holding.");
+        return;
+    }
+    
+    // Group transactions by month
+    const transactionsByMonth = {};
+    for (const trans of incomeNextMonthTransactions) {
+        const month = trans.date.substring(0, 7); // Extract YYYY-MM
+        if (!transactionsByMonth[month]) {
+            transactionsByMonth[month] = [];
+        }
+        transactionsByMonth[month].push(trans);
+    }
+    
+    // Get all months and sort them chronologically
+    const months = Object.keys(transactionsByMonth).sort();
+    const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
+    
+    console.log(`Found 'incomeNextMonth' transactions in ${months.length} month(s)`);
+    bar.start(months.length, 0);
+    
+    // Process each month in chronological order
+    for (const month of months) {
+        // Calculate total income for next month
+        let totalAmount = 0;
+        for (const trans of transactionsByMonth[month]) {
+            totalAmount += trans.value;
+        }
+        
+        // Apply "hold for next month" using the Actual Budget API
+        try {
+            await api.holdBudgetForNextMonth(month, totalAmount);
+            console.log(`Successfully held ${totalAmount/100} for month ${month}`);
+        } catch (error) {
+            console.error(`Error holding budget for month ${month}: ${error.message}`);
+        }
+        
+        bar.increment();
+    }
+    
+    bar.stop();
+    console.log("Finished applying 'Hold for next month' to all months");
 }
 
 (async () => {
@@ -606,6 +713,7 @@ async function generate_month_ahead_report() {
             server_payees = await api.getPayees();
             transactions = await add_transactions();
             budgets = await proc_budget_months();
+            await applyMonthAheadBudgeting();
         }
     );
 
