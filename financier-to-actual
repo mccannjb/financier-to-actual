@@ -15,19 +15,17 @@ program
     the CLI flags will take precedence. (A '.env' file will override any existing
     environment variable definitions)
     
-    Please note: there is currently no way via the Actual API to specify that income
-    should be "held" for the next month, so if your Financier budget assigns income
-    to the next month (like how YNAB recommended and described here:
-    https://actualbudget.org/docs/getting-started/starting-clean/#the-month-ahead-method),
-    then after the import you will need to manually hold the extra each month going
-    back through the budget's history. If you don't do this, it will appear
-    that each month has extra "To budget", so it won't match up exactly with
-    what is shown in Financier. This is just a display issue and doesn't affect the
-    actual budget amounts as far as I understand. Unfortunately, there's nothing that
-    can be done about this on the import side because it is  a limitation
-    based on how I understand the API to work at this point (see 
-    https://github.com/actualbudget/actual/issues/1982)`)
-    .version('0.0.1')
+    This version includes support for:
+    - Month-ahead budgeting: Income marked for next month in Financier will be 
+      automatically held for the following month using Actual's hold feature
+    - Flag preservation: Financier flags are converted to color names and added
+      to transaction notes as "[Color Flag] original note"
+    - Carryover categories: Categories marked with carryover in Financier will
+      have the carryover flag set in Actual
+    
+    Note: After import, a report will be generated showing which months had
+    income held for the following month, allowing you to verify the import.`)
+    .version('1.0.0')
     .option('--url <url>', 'The URL for the actual server (e.g. "https://actual.myhost.com") (env: ACTUAL_URL)')
     .option('--password <password>', 'The password for the actual server (env: ACTUAL_PASSWORD)')
     .option('--json <path_to_json>', 'The path to the Financier JSON export (env: FINANCIER_JSON)');
@@ -117,14 +115,49 @@ let f2a_account_type_map = {
     'CASH': 'other'
 };
 
+// Mapping from Financier flag hex codes to color names
+const FLAG_COLOR_MAP = {
+    "#faa710": "Orange",
+    "#76b852": "Green",
+    "#e5e500": "Yellow",
+    "#5276b8": "Blue",
+    "#ff0000": "Red",
+    "#b852a9": "Purple"
+};
+
 // keys in this object should be financier IDs, and their values
 // should be the new IDs they get from actual when calling "createXXX()"
 let f2a_id_mappings = {};
+
+// Track income for next month by month
+let incomeForNextMonth = {};
 
 function uuid_from_financier_id(financier_id) {
     let n = financier_id.lastIndexOf("_");
     uuid = financier_id.substring(n + 1);
     return uuid;
+}
+
+// Helper function to convert hex color codes to readable names
+function getColorNameFromHex(hexCode) {
+    if (!hexCode) return null;
+    return FLAG_COLOR_MAP[hexCode] || "Colored";
+}
+
+// Helper function to prepend flag to notes
+function addFlagToNotes(notes, flagHex) {
+    if (!flagHex) return notes;
+    
+    const colorName = getColorNameFromHex(flagHex);
+    const flagPrefix = `[${colorName} Flag] `;
+    
+    // If notes is empty or null, just return the flag prefix
+    if (!notes || notes === "null") {
+        return flagPrefix.trim();
+    }
+    
+    // Otherwise, prepend the flag to existing notes
+    return flagPrefix + notes;
 }
 
 function set_transfer_payee(trans) {
@@ -225,22 +258,6 @@ function map_payees() {
     return AB_payees
 }
 
-// Helper function to convert hex color codes to readable names
-function getColorNameFromHex(hexCode) {
-    if (!hexCode) return null;
-    
-    const colorMap = {
-        "#faa710": "Orange",
-        "#76b852": "Green",
-        "#e5e500": "Yellow",
-        "#5276b8": "Blue",
-        "#ff0000": "Red",
-        "#b852a9": "Purple"
-    };
-    
-    return colorMap[hexCode] || "Colored";
-}
-
 function map_single_transaction(transaction, type) {
     /* 
     `type` should be either "main" or "split"
@@ -293,34 +310,26 @@ function map_single_transaction(transaction, type) {
         financier_id = transaction["id"];
     }
 
-    // Process flag if present
-    let notes = transaction["memo"];
-    if (transaction["flag"]) {
-        const colorName = getColorNameFromHex(transaction["flag"]);
-        // Prepend the flag information to the notes
-        notes = `[${colorName} Flag] ${notes || ""}`;
-    }
-
-    // Format the date to ensure it's in YYYY-MM-DD format
-    let formattedDate = transaction['date'];
-    if (formattedDate && typeof formattedDate === 'string') {
-        // If date contains time information (has a 'T'), extract just the date part
-        if (formattedDate.includes('T')) {
-            formattedDate = formattedDate.split('T')[0];
-        }
-    }
+    // Process flag and notes
+    let notes = addFlagToNotes(transaction["memo"], transaction["flag"]);
 
     res = {
         "id": financier_id,
         "amount": transaction['value'],
-        "date": formattedDate,
+        "date": transaction['date'],
         "notes": notes,
         "cleared": transaction["cleared"],
-        // "financier_account": transaction["account"],
-        // "financier_category": transaction["category"],
-        // "financier_id": financier_id,
-        // "financier_payee": transaction["payee"],
-        // "financier_transfer": transaction["transfer"]
+        // Store original category for tracking incomeNextMonth
+        "_financier_category": transaction["category"]
+    }
+
+    // Track incomeNextMonth transactions
+    if (transaction["category"] === "incomeNextMonth" && type === "main") {
+        const month = transaction["date"].substring(0, 7); // Extract YYYY-MM
+        if (!incomeForNextMonth[month]) {
+            incomeForNextMonth[month] = 0;
+        }
+        incomeForNextMonth[month] += transaction["value"];
     }
 
     // need to set account
@@ -352,17 +361,11 @@ function map_single_transaction(transaction, type) {
 function map_transactions() {
     let trans_data = financier_data.filter((data) => data._id.includes('_transaction_'))
     let AB_transactions = trans_data.map((trans) => {return map_single_transaction(trans, "main")})
-
-    // let transGroupedByAccount = AB_transactions.reduce(function (r, a) {
-    //     r[a.financier_account] = r[a.financier_account] || [];
-    //     r[a.financier_account].push(a);
-    //     return r;
-    // }, Object.create(null));
     return AB_transactions
 }
 
 async function add_accounts() {
-    console.log("(Step 1/7) adding accounts to budget")
+    console.log("(Step 1/8) adding accounts to budget")
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(accounts.length, 0);
     for (account of accounts) {
@@ -376,7 +379,7 @@ async function add_accounts() {
 }
 
 async function add_category_groups() {
-    console.log("(Step 2/7) adding category groups");
+    console.log("(Step 2/8) adding category groups");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(category_groups.length, 0);
     for (cat_group of category_groups) {
@@ -390,18 +393,14 @@ async function add_category_groups() {
 }
 
 async function add_categories() {
-    console.log("(Step 3/7) adding categories");
+    console.log("(Step 3/8) adding categories");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(categories.length, 0);
     for (cat of categories.slice().reverse()) {
-        try{
-            cat.group_id = f2a_id_mappings[cat.group_id]
-            let id = await api.createCategory(cat);
-            f2a_id_mappings[cat.id] = id;
-            cat.id = id;
-        } catch(error) {
-            console.error("Error with category", cat)
-        }
+        cat.group_id = f2a_id_mappings[cat.group_id]
+        let id = await api.createCategory(cat);
+        f2a_id_mappings[cat.id] = id;
+        cat.id = id;
         bar.increment();
     }
     bar.stop();
@@ -415,7 +414,7 @@ async function add_categories() {
 }
 
 async function add_payees() {
-    console.log("(Step 4/7) adding payees");
+    console.log("(Step 4/8) adding payees");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(payees.length, 0);
     for (payee of payees) {
@@ -429,7 +428,7 @@ async function add_payees() {
 }
 
 async function add_transactions() {
-    console.log("(Step 5/7) adding transactions");
+    console.log("(Step 5/8) adding transactions");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(transactions.length, 0);
     flattened_transactions = transactions.slice();
@@ -483,22 +482,16 @@ async function add_transactions() {
 
 async function proc_budget_months() {
     function _extract_data(m_category) {
-        // Updated more flexible regex that works with both formats
-        let regexp = /b_.*?_m_category_([0-9]{4}-[0-9]{2})-[0-9]{2}_(.*)/;
-        
-        const match = m_category.match(regexp);
-        if (!match) {
-            console.error(`Failed to match pattern for: ${m_category}`);
-            return [null, null, null];
-        }
-        
-        let month = match[1];
-        let category_uuid = match[2];
-        
-        return [month, category_uuid, f2a_id_mappings[category_uuid]];
+        // pulls out the month and financier category id from the "_id" value
+        // of the financier data; returns month, financier category, and corresponding 
+        // actual category
+        let regexp = /b_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_m_category_([0-9]{4}-[0-9]{2})-[0-9]{2}_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/;
+        let month = m_category.match(regexp)[1];
+        let category_uuid = m_category.match(regexp)[2];
+        return [month, category_uuid, f2a_id_mappings[category_uuid]]
     }
 
-    console.log("(Step 6/7) processing budget amounts");
+    console.log("(Step 6/8) processing budget amounts");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
 
     // month categories have "_m_category_" in their _id parameter
@@ -508,170 +501,132 @@ async function proc_budget_months() {
         // loop through, extract values, and make actual API calls to set budget values
         let month, financier_category, actual_category;
         [month, financier_category, actual_category] = _extract_data(mc._id);
-        
-        // Skip if we couldn't extract the data properly
-        if (!month || !financier_category || !actual_category) {
-            console.warn(`Skipping budget entry with ID: ${mc._id} - could not extract required information`);
-            bar.increment();
-            continue;
-        }
-        
         let value = mc.budget;
         let carryover = mc.overspending == true;
 
         // these two API methods set budget information
-        try {
-            await api.setBudgetAmount(month, actual_category, value);
-            await api.setBudgetCarryover(month, actual_category, carryover);
-        } catch (error) {
-            console.error(`Error setting budget for ${month}, category ${financier_category}: ${error.message}`);
-        }
+        // setBudgetAmount(month month, id categoryId, amount value) → Promise<null>
+        // setBudgetCarryover(month month, id categoryId, bool flag) → Promise<null>
+        await api.setBudgetAmount(month, actual_category, value);
+        await api.setBudgetCarryover(month, actual_category, carryover);
         bar.increment();
     }
     bar.stop();
 }
 
-async function generate_month_ahead_report() {
-    console.log("Generating month-ahead report...");
+async function apply_month_ahead_holds() {
+    console.log("(Step 7/8) applying month-ahead income holds");
     
-    // Get all transactions with incomeNextMonth category
-    const incomeNextMonthTransactions = financier_data.filter(
-        (data) => data._id.includes('_transaction_') && data.category === 'incomeNextMonth'
-    );
-    
-    if (incomeNextMonthTransactions.length === 0) {
-        console.log("No 'incomeNextMonth' transactions found. No report needed.");
+    const months = Object.keys(incomeForNextMonth).sort();
+    if (months.length === 0) {
+        console.log("No income marked for next month found.");
         return;
     }
     
-    // Get budget months from Actual to compare
-    const actualBudgetMonths = await api.getBudgetMonths();
-    
-    // Group transactions by month
-    const transactionsByMonth = {};
-    for (const trans of incomeNextMonthTransactions) {
-        const month = trans.date.substring(0, 7); // Extract YYYY-MM
-        if (!transactionsByMonth[month]) {
-            transactionsByMonth[month] = [];
-        }
-        transactionsByMonth[month].push(trans);
-    }
-    
-    // Get all months and sort them chronologically
-    const months = Object.keys(transactionsByMonth).sort();
-    console.log(`Found 'incomeNextMonth' transactions in ${months.length} month(s): ${months.join(', ')}`);
-    
-    // Create the report content
-    let reportContent = "# Month-Ahead Budget Report\n\n";
-    reportContent += "This report shows how much you need to 'Hold for next month' in Actual Budget for each month.\n\n";
-    reportContent += "| Month | Amount to Hold (cents) | Amount to Hold (dollars) | Expected To Budget | Actual To Budget | Difference | Transactions |\n";
-    reportContent += "|-------|------------------------|--------------------------|-------------------|-----------------|------------|-------------|\n";
-    
-    // Process each month in chronological order
-    let cumulativeDifference = 0;
-    
-    for (const month of months) {
-        // Calculate total income for next month
-        let totalAmount = 0;
-        let transactionDetails = [];
-        
-        for (const trans of transactionsByMonth[month]) {
-            totalAmount += trans.value;
-            // Add transaction details
-            transactionDetails.push(`${trans.date}: ${trans.value/100} (${trans.memo || 'No memo'})`);
-        }
-        
-        // Try to fetch the budget month from Actual
-        let actualToBudget = "N/A";
-        try {
-            if (actualBudgetMonths.includes(month)) {
-                const budgetMonth = await api.getBudgetMonth(month);
-                actualToBudget = budgetMonth.toBudget || 0;
-                cumulativeDifference += totalAmount - actualToBudget;
-            }
-        } catch (error) {
-            console.log(`Error fetching budget month ${month}: ${error.message}`);
-        }
-        
-        // Add to report with comparison
-        reportContent += `| ${month} | ${totalAmount} | ${(totalAmount/100).toFixed(2)} | ${(totalAmount/100).toFixed(2)} | ${actualToBudget !== "N/A" ? (actualToBudget/100).toFixed(2) : "N/A"} | ${actualToBudget !== "N/A" ? ((totalAmount - actualToBudget)/100).toFixed(2) : "N/A"} | ${transactionDetails.join(', ')} |\n`;
-    }
-    
-    // Add instructions and analysis
-    reportContent += "\n\n## Analysis\n\n";
-    reportContent += `The cumulative difference between expected and actual "To Budget" amounts is: ${(cumulativeDifference/100).toFixed(2)}\n\n`;
-    reportContent += "This difference could be due to:\n";
-    reportContent += "1. Overspending that was carried forward differently in Financier vs. Actual\n";
-    reportContent += "2. Different handling of income categorization\n";
-    reportContent += "3. Differences in how budget allocations and adjustments are calculated\n\n";
-    
-    reportContent += "## How to Fix Your Budget\n\n";
-    reportContent += "1. In Actual Budget, navigate to each month listed above\n";
-    reportContent += "2. Click on the 'To Budget' amount\n";
-    reportContent += "3. Select 'Hold for next month'\n";
-    reportContent += "4. Enter the dollar amount shown in the 'Amount to Hold (dollars)' column\n";
-    reportContent += "5. Click 'Hold'\n";
-    reportContent += "6. After applying these changes, your Actual Budget should more closely match what you had in Financier\n";
-    
-    // Write to file
-    const reportFileName = "month_ahead_report.md";
-    fs.writeFileSync(reportFileName, reportContent);
-    
-    console.log(`Month-ahead report generated: ${reportFileName}`);
-    return reportFileName;
-}
-
-async function applyMonthAheadBudgeting() {
-    console.log("Applying 'Hold for next month' to each budget month...");
-    
-    // Get all transactions with incomeNextMonth category
-    const incomeNextMonthTransactions = financier_data.filter(
-        (data) => data._id.includes('_transaction_') && data.category === 'incomeNextMonth'
-    );
-    
-    if (incomeNextMonthTransactions.length === 0) {
-        console.log("No 'incomeNextMonth' transactions found. Skipping budget holding.");
-        return;
-    }
-    
-    // Group transactions by month
-    const transactionsByMonth = {};
-    for (const trans of incomeNextMonthTransactions) {
-        const month = trans.date.substring(0, 7); // Extract YYYY-MM
-        if (!transactionsByMonth[month]) {
-            transactionsByMonth[month] = [];
-        }
-        transactionsByMonth[month].push(trans);
-    }
-    
-    // Get all months and sort them chronologically
-    const months = Object.keys(transactionsByMonth).sort();
+    console.log(`Found income for next month in ${months.length} month(s)`);
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
-    
-    console.log(`Found 'incomeNextMonth' transactions in ${months.length} month(s)`);
     bar.start(months.length, 0);
     
-    // Process each month in chronological order
+    const holdResults = [];
+    
     for (const month of months) {
-        // Calculate total income for next month
-        let totalAmount = 0;
-        for (const trans of transactionsByMonth[month]) {
-            totalAmount += trans.value;
-        }
-        
-        // Apply "hold for next month" using the Actual Budget API
+        const amount = incomeForNextMonth[month];
         try {
-            await api.holdBudgetForNextMonth(month, totalAmount);
-            console.log(`Successfully held ${totalAmount/100} for month ${month}`);
+            const result = await api.holdBudgetForNextMonth(month, amount);
+            
+            // Check if the hold was successful
+            if (result === true || result === undefined) {
+                holdResults.push({
+                    month,
+                    amount,
+                    status: 'success',
+                    amountInDollars: (amount / 100).toFixed(2)
+                });
+            } else {
+                holdResults.push({
+                    month,
+                    amount,
+                    status: 'failed',
+                    amountInDollars: (amount / 100).toFixed(2),
+                    reason: 'API returned false - insufficient funds to hold'
+                });
+            }
         } catch (error) {
-            console.error(`Error holding budget for month ${month}: ${error.message}`);
+            holdResults.push({
+                month,
+                amount,
+                status: 'error',
+                amountInDollars: (amount / 100).toFixed(2),
+                reason: error.message
+            });
         }
-        
         bar.increment();
     }
-    
     bar.stop();
-    console.log("Finished applying 'Hold for next month' to all months");
+    
+    return holdResults;
+}
+
+async function generate_month_ahead_report(holdResults) {
+    console.log("(Step 8/8) generating month-ahead report");
+    
+    if (!holdResults || holdResults.length === 0) {
+        console.log("No month-ahead holds to report.");
+        return;
+    }
+    
+    // Create the report content
+    let reportContent = "# Month-Ahead Budget Import Report\n\n";
+    reportContent += `Generated: ${new Date().toISOString()}\n`;
+    reportContent += `Budget: ${budget_name}\n\n`;
+    
+    reportContent += "## Summary\n\n";
+    const successful = holdResults.filter(r => r.status === 'success').length;
+    const failed = holdResults.filter(r => r.status !== 'success').length;
+    reportContent += `- Total months processed: ${holdResults.length}\n`;
+    reportContent += `- Successful holds: ${successful}\n`;
+    reportContent += `- Failed holds: ${failed}\n\n`;
+    
+    reportContent += "## Hold Results\n\n";
+    reportContent += "| Month | Amount (cents) | Amount ($) | Status | Notes |\n";
+    reportContent += "|-------|----------------|------------|--------|-------|\n";
+    
+    for (const result of holdResults) {
+        const notes = result.reason || 'Successfully held for next month';
+        reportContent += `| ${result.month} | ${result.amount} | $${result.amountInDollars} | ${result.status} | ${notes} |\n`;
+    }
+    
+    reportContent += "\n## Next Steps\n\n";
+    reportContent += "1. Review the hold results above\n";
+    reportContent += "2. For any failed holds, you may need to manually adjust in Actual Budget\n";
+    reportContent += "3. Verify that the 'To Budget' amounts match your expectations\n";
+    
+    if (failed > 0) {
+        reportContent += "\n### Failed Holds\n\n";
+        reportContent += "Some holds failed, usually because there wasn't enough income available in that month. ";
+        reportContent += "This can happen if:\n";
+        reportContent += "- The income transactions weren't properly imported\n";
+        reportContent += "- The month already had its income allocated to categories\n";
+        reportContent += "- There was an issue with the API call\n\n";
+        reportContent += "You can manually hold amounts in Actual Budget by:\n";
+        reportContent += "1. Navigate to the month in question\n";
+        reportContent += "2. Click on the 'To Budget' amount\n";
+        reportContent += "3. Select 'Hold for next month'\n";
+        reportContent += "4. Enter the amount shown above\n";
+    }
+    
+    // Write to file
+    const reportFileName = `month_ahead_report_${new Date().toISOString().split('T')[0]}.md`;
+    fs.writeFileSync(reportFileName, reportContent);
+    
+    console.log(`\nMonth-ahead report generated: ${reportFileName}`);
+    
+    // Also display a summary in the console
+    console.log("\n=== Month-Ahead Hold Summary ===");
+    holdResults.forEach(result => {
+        const status = result.status === 'success' ? '✓' : '✗';
+        console.log(`${status} ${result.month}: $${result.amountInDollars} - ${result.reason || 'Success'}`);
+    });
 }
 
 (async () => {
@@ -713,11 +668,14 @@ async function applyMonthAheadBudgeting() {
             server_payees = await api.getPayees();
             transactions = await add_transactions();
             budgets = await proc_budget_months();
-            await applyMonthAheadBudgeting();
+            
+            // Apply month-ahead holds
+            const holdResults = await apply_month_ahead_holds();
+            
+            // Generate report
+            await generate_month_ahead_report(holdResults);
         }
     );
-
-    await generate_month_ahead_report();
 
     await api.shutdown();
   })();
