@@ -313,10 +313,19 @@ function map_single_transaction(transaction, type) {
     // Process flag and notes
     let notes = addFlagToNotes(transaction["memo"], transaction["flag"]);
 
+    // Format the date to ensure it's in YYYY-MM-DD format
+    let formattedDate = transaction['date'];
+    if (formattedDate && typeof formattedDate === 'string') {
+        // If date contains time information (has a 'T'), extract just the date part
+        if (formattedDate.includes('T')) {
+            formattedDate = formattedDate.split('T')[0];
+        }
+    }
+
     res = {
         "id": financier_id,
         "amount": transaction['value'],
-        "date": transaction['date'],
+        "date": formattedDate,
         "notes": notes,
         "cleared": transaction["cleared"],
         // Store original category for tracking incomeNextMonth
