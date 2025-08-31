@@ -521,7 +521,7 @@ async function proc_budget_months() {
         return [month, category_uuid, f2a_id_mappings[category_uuid]]
     }
 
-    console.log("(Step 6/8) processing budget amounts");
+    console.log("(Step 7/8) processing budget amounts");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
 
     // month categories have "_m_category_" in their _id parameter
@@ -545,7 +545,7 @@ async function proc_budget_months() {
 }
 
 async function apply_month_ahead_holds() {
-    console.log("(Step 7/8) applying month-ahead income holds");
+    console.log("(Step 6/8) applying month-ahead income holds");
     
     const months = Object.keys(incomeForNextMonth).sort();
     if (months.length === 0) {
@@ -703,10 +703,17 @@ async function generate_month_ahead_report(holdResults) {
             payees = await add_payees();
             server_payees = await api.getPayees();
             transactions = await add_transactions();
-            budgets = await proc_budget_months();
             
-            // Apply month-ahead holds
+            // Sync to ensure all transactions are processed
+            console.log("Syncing transactions...");
+            await api.sync();
+            
+            // Apply month-ahead holds BEFORE setting budget amounts
+            // This leaves incomeNextMonth amounts unallocated and available for holding
             const holdResults = await apply_month_ahead_holds();
+            
+            // Now set budget amounts (this will allocate remaining income to categories)
+            budgets = await proc_budget_months();
             
             // Generate report
             await generate_month_ahead_report(holdResults);
