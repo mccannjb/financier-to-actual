@@ -407,11 +407,13 @@ async function add_categories() {
     bar.start(categories.length, 0);
     for (const cat of categories.slice().reverse()) {
         try {
+const originalGroupId = cat.group_id;
             cat.group_id = f2a_id_mappings[cat.group_id];
             
             // Check if group_id mapping exists
             if (!cat.group_id) {
-                console.error(`\nWarning: No group mapping found for category "${cat.name}" with group ID "${cat.group_id}"`);
+                console.error(`\nWarning: No group mapping found for category "${cat.name}" with original group ID "${originalGroupId}"`);
+console.error(`  Original category data may have null/undefined masterCategory. Skipping this category.`);
                 bar.increment();
                 continue;
             }
