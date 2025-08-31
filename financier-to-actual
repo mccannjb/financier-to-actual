@@ -377,7 +377,7 @@ async function add_accounts() {
     console.log("(Step 1/8) adding accounts to budget")
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(accounts.length, 0);
-    for (account of accounts) {
+    for (const account of accounts) {
         let id = await api.createAccount(account, 0);
         f2a_id_mappings[account.id] = id;
         account.id = id;
@@ -391,7 +391,7 @@ async function add_category_groups() {
     console.log("(Step 2/8) adding category groups");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(category_groups.length, 0);
-    for (cat_group of category_groups) {
+    for (const cat_group of category_groups) {
         let id = await api.createCategoryGroup(cat_group);
         f2a_id_mappings[cat_group.id] = id;
         cat_group.id = id;
@@ -405,6 +405,7 @@ async function add_categories() {
     console.log("(Step 3/8) adding categories");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(categories.length, 0);
+    for (const cat of categories.slice().reverse()) {
         try {
             cat.group_id = f2a_id_mappings[cat.group_id];
             
@@ -415,9 +416,9 @@ async function add_categories() {
                 continue;
             }
             
-        let id = await api.createCategory(cat);
-        f2a_id_mappings[cat.id] = id;
-        cat.id = id;
+            let id = await api.createCategory(cat);
+            f2a_id_mappings[cat.id] = id;
+            cat.id = id;
         } catch (error) {
             console.error(`\nError creating category "${cat.name}":`, error.message);
             // Continue processing other categories
@@ -444,7 +445,7 @@ async function add_payees() {
     console.log("(Step 4/8) adding payees");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(payees.length, 0);
-    for (payee of payees) {
+    for (const payee of payees) {
         let id = await api.createPayee(payee);
         f2a_id_mappings[payee.id] = id;
         payee.id = id;
@@ -459,7 +460,7 @@ async function add_transactions() {
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(transactions.length, 0);
     flattened_transactions = transactions.slice();
-    for (trans of transactions) {
+    for (const trans of transactions) {
         // add account information to each subtransaction and push the subtransactions
         // into the flattened_transactions array so we can search across all
         // transactions including splits when looking for transfer matches
@@ -471,7 +472,7 @@ async function add_transactions() {
         }
     }
 
-    for (trans of transactions) {
+    for (const trans of transactions) {
         // for each transaction, need to update payee, category, account
         // and splits with proper "actual ID" values rather than financier
         if ("account" in trans) {
@@ -524,7 +525,7 @@ async function proc_budget_months() {
     // month categories have "_m_category_" in their _id parameter
     let month_categories = financier_data.filter((data) => data._id.includes('_m_category_'));
     bar.start(month_categories.length, 0);
-    for (mc of month_categories) {
+    for (const mc of month_categories) {
         // loop through, extract values, and make actual API calls to set budget values
         let month, financier_category, actual_category;
         [month, financier_category, actual_category] = _extract_data(mc._id);
