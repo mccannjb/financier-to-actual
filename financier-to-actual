@@ -405,11 +405,23 @@ async function add_categories() {
     console.log("(Step 3/8) adding categories");
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(categories.length, 0);
-    for (cat of categories.slice().reverse()) {
-        cat.group_id = f2a_id_mappings[cat.group_id]
+        try {
+            cat.group_id = f2a_id_mappings[cat.group_id];
+            
+            // Check if group_id mapping exists
+            if (!cat.group_id) {
+                console.error(`\nWarning: No group mapping found for category "${cat.name}" with group ID "${cat.group_id}"`);
+                bar.increment();
+                continue;
+            }
+            
         let id = await api.createCategory(cat);
         f2a_id_mappings[cat.id] = id;
         cat.id = id;
+        } catch (error) {
+            console.error(`\nError creating category "${cat.name}":`, error.message);
+            // Continue processing other categories
+        }
         bar.increment();
     }
     bar.stop();
@@ -417,8 +429,14 @@ async function add_categories() {
     
     // explicitly add income category mappings from server since
     // they are not included in the above loop
-    f2a_id_mappings['income'] = categories.filter((data) => data.name == "Income")[0].id
-    f2a_id_mappings['incomeNextMonth'] = f2a_id_mappings['income']
+    const incomeCategory = categories.find(data => data.name === "Income");
+    if (incomeCategory) {
+        f2a_id_mappings['income'] = incomeCategory.id;
+        f2a_id_mappings['incomeNextMonth'] = f2a_id_mappings['income'];
+    } else {
+        console.error("Warning: Could not find Income category in created categories");
+    }
+    
     return categories;
 }
 
@@ -552,12 +570,18 @@ async function apply_month_ahead_holds() {
                     amountInDollars: (amount / 100).toFixed(2)
                 });
             } else {
+                // Get more detailed error information when hold fails
+                const budgetMonth = await api.getBudgetMonth(month);
+                const reason = budgetMonth.toBudget < amount ?
+                    'Insufficient unallocated income available' :
+                    'API returned false - insufficient funds to hold';
+                
                 holdResults.push({
                     month,
                     amount,
                     status: 'failed',
                     amountInDollars: (amount / 100).toFixed(2),
-                    reason: 'API returned false - insufficient funds to hold'
+                    reason: reason
                 });
             }
         } catch (error) {
