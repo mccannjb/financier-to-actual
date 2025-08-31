@@ -131,3 +131,153 @@ Got messages from server 0
 ### It didn't work... Help?
 
 This tool is provided very much as-is, but if you have issues, make an issue on this repo and I can try to look into it as I'm able.
+
+---
+
+# Financier to Actual Budget Importer - Enhanced Version
+
+This enhanced version of the Financier to Actual Budget importer includes support for three additional features:
+
+1. **Month-Ahead Budgeting** - Automatically handles income designated for next month
+2. **Flag Preservation** - Converts Financier flags to color names in transaction notes
+3. **Carryover Categories** - Preserves overspending carryover settings
+
+## New Features
+
+### 1. Month-Ahead Budgeting
+
+In Financier, income can be designated as either for the current month or the next month. This importer now:
+
+- Tracks all transactions with the `incomeNextMonth` category
+- After importing all data, automatically calls `holdBudgetForNextMonth` for each month
+- Generates a detailed report showing which months had income held and whether each hold succeeded
+
+**How it works:**
+```
+January income marked "for next month" → Held in January → Available in February
+```
+
+**Report Output:**
+After import, you'll find a file named `month_ahead_report_YYYY-MM-DD.md` with details about:
+- Which months had income held for the following month
+- Success/failure status of each hold operation
+- Instructions for manual adjustments if needed
+
+### 2. Flag Preservation
+
+Financier uses colored flags on transactions. These are now preserved by:
+
+- Converting hex color codes to readable names
+- Prepending the flag information to transaction notes
+- Format: `[Color Flag] original note text`
+
+**Flag Color Mappings:**
+- 🔴 Red (`#ff0000`)
+- 🔵 Blue (`#5276b8`) 
+- 🟢 Green (`#76b852`)
+- 🟡 Yellow (`#e5e500`)
+- 🟠 Orange (`#faa710`)
+- 🟣 Purple (`#b852a9`)
+
+**Example:**
+- Financier: Transaction with red flag and note "Important payment"
+- Actual: Transaction with note "[Red Flag] Important payment"
+
+### 3. Carryover Categories
+
+Categories in Financier can be set to carry over overspending from month to month. This setting is preserved:
+
+- Categories with `overspending: true` in Financier
+- Will have carryover enabled in Actual Budget
+- Ensures deficit tracking continues across months
+
+## Usage
+
+The basic usage remains the same:
+
+```bash
+node financier-to-actual --url https://actual.myserver.com --password mypassword --json "My Budget.json"
+```
+
+Or using environment variables in `.env`:
+```
+ACTUAL_URL=https://actual.myserver.com
+ACTUAL_PASSWORD=mypassword
+FINANCIER_JSON=My Budget.json
+```
+
+Then run:
+```bash
+node financier-to-actual
+```
+
+## Testing the New Features
+
+### Test Individual Features
+
+1. **Test flag conversion:**
+   ```bash
+   node test-new-features.js
+   ```
+
+2. **Test hold functionality:**
+   ```bash
+   node test-hold-functionality.js
+   ```
+
+### Understanding Hold Results
+
+The `holdBudgetForNextMonth` function may return `false` or fail if:
+
+1. **Insufficient income** - The month doesn't have enough unallocated income
+2. **Already allocated** - The income has already been budgeted to categories
+3. **Invalid month** - The month doesn't exist in the budget
+
+The import report will show the status of each hold operation and provide guidance for manual adjustments.
+
+## Limitations and Notes
+
+### Month-Ahead Budgeting
+- Actual Budget requires manual "hold" operations, unlike Financier's automatic handling
+- If a hold fails, you'll need to manually adjust in the Actual Budget UI
+- The hold amount must not exceed the available "To Budget" amount
+
+### Carryover Behavior
+- Actual's carryover may behave slightly differently than Financier's
+- Review your categories after import to ensure carryover is working as expected
+- Some manual adjustments may be needed for complex carryover scenarios
+
+### Flag Colors
+- Only the six standard Financier flag colors are supported
+- Custom colors will be labeled as "Colored Flag"
+- Flags are permanently added to the note text and cannot be removed via the UI
+
+## Troubleshooting
+
+### "Hold returned false"
+This means there wasn't enough income available to hold. Check:
+- Was the income transaction imported correctly?
+- Is the income already allocated to categories?
+- Try manually holding in the Actual Budget UI
+
+### Missing flags
+Ensure your Financier export includes the `flag` field in transactions. Flags should appear as hex color codes (e.g., `#ff0000`).
+
+### Carryover not working
+After import:
+1. Navigate to the budget
+2. Click on the category
+3. Check "Rollover overspending" is enabled
+4. Some categories may need manual adjustment
+
+## Post-Import Checklist
+
+1. ✓ Review `month_ahead_report_*.md` for hold results
+2. ✓ Verify flags appear in transaction notes
+3. ✓ Check categories have correct carryover settings
+4. ✓ Manually adjust any failed holds
+5. ✓ Verify budget balances match Financier
+
+## Contributing
+
+If you encounter issues or have suggestions for improvements, please open an issue on the repository.
