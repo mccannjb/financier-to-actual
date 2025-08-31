@@ -407,13 +407,13 @@ async function add_categories() {
     bar.start(categories.length, 0);
     for (const cat of categories.slice().reverse()) {
         try {
-const originalGroupId = cat.group_id;
+            const originalGroupId = cat.group_id;
             cat.group_id = f2a_id_mappings[cat.group_id];
             
             // Check if group_id mapping exists
             if (!cat.group_id) {
                 console.error(`\nWarning: No group mapping found for category "${cat.name}" with original group ID "${originalGroupId}"`);
-console.error(`  Original category data may have null/undefined masterCategory. Skipping this category.`);
+                console.error(`  Original category data may have null/undefined masterCategory. Skipping this category.`);
                 bar.increment();
                 continue;
             }
@@ -474,7 +474,7 @@ async function add_transactions() {
         }
     }
 
-    for (const trans of transactions) {
+    for (let trans of transactions) {
         // for each transaction, need to update payee, category, account
         // and splits with proper "actual ID" values rather than financier
         if ("account" in trans) {
@@ -491,15 +491,15 @@ async function add_transactions() {
 
         if ("subtransactions" in trans) {
             // need to update category and payee for each sub transaction
-            trans.subtransactions = trans.subtransactions.map((trans) => {
-                if ("payee" in trans) {
-                    trans.payee = f2a_id_mappings[trans.payee];
+            trans.subtransactions = trans.subtransactions.map((subTrans) => {
+                if ("payee" in subTrans) {
+                    subTrans.payee = f2a_id_mappings[subTrans.payee];
                 }
-                if ("category" in trans) {
-                    trans.category = f2a_id_mappings[trans.category];
+                if ("category" in subTrans) {
+                    subTrans.category = f2a_id_mappings[subTrans.category];
                 }
-                trans = set_transfer_payee(trans);
-                return trans;
+                subTrans = set_transfer_payee(subTrans);
+                return subTrans;
             })
         }
         await api.addTransactions(trans["account"], [trans]);
