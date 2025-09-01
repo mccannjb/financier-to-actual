@@ -79,7 +79,7 @@ Please check the help below and provide them.
 
 console.log(`Using the following settings:
          ACTUAL_URL: ${ACTUAL_URL} (source: ${url_source})
-    ACTUAL_PASSWORD: ${ACTUAL_PASSWORD} (source: ${password_source})
+    ACTUAL_PASSWORD: *** (source: ${password_source})
      FINANCIER_JSON: ${FINANCIER_JSON} (source: ${json_source})
 `);
 
@@ -529,7 +529,7 @@ async function proc_budget_months() {
         return [month, category_uuid, f2a_id_mappings[category_uuid]]
     }
 
-    console.log("(Step 6/8) processing budget amounts");
+    console.log("(Step 7/8) processing budget amounts");
     
     // month categories have "_m_category_" in their _id parameter
     let month_categories = financier_data.filter((data) => data._id.includes('_m_category_'));
@@ -586,7 +586,7 @@ async function proc_budget_months() {
 }
 
 async function apply_month_ahead_holds() {
-    console.log("(Step 7/8) applying month-ahead income holds");
+    console.log("(Step 6/8) applying month-ahead income holds");
     
     const months = Object.keys(incomeForNextMonth).sort();
     if (months.length === 0) {
@@ -595,6 +595,16 @@ async function apply_month_ahead_holds() {
     }
     
     console.log(`Found income for next month in ${months.length} month(s)`);
+    
+    // Try to trigger budget calculations by getting all budget months
+    console.log("Triggering budget calculations...");
+    try {
+        const budgetMonths = await api.getBudgetMonths();
+        console.log(`Found ${budgetMonths.length} budget months after transaction import`);
+    } catch (error) {
+        console.log("Could not get budget months:", error.message);
+    }
+    
     const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar.start(months.length, 0);
     
@@ -603,10 +613,11 @@ async function apply_month_ahead_holds() {
     for (const month of months) {
         const amount = incomeForNextMonth[month];
         try {
+            const budgetMonthBefore = await api.getBudgetMonth(month);
             const result = await api.holdBudgetForNextMonth(month, amount);
             
-            // Check if the hold was successful
-            if (result === true || result === undefined) {
+            // Check if the hold was successful (API should return false on failure)
+            if (result === null || result === true) {
                 holdResults.push({
                     month,
                     amount,
@@ -616,8 +627,18 @@ async function apply_month_ahead_holds() {
             } else {
                 // Get more detailed error information when hold fails
                 const budgetMonth = await api.getBudgetMonth(month);
-                const reason = budgetMonth.toBudget < amount ?
+                const summary = {
+                    month: budgetMonth.month,
+                    toBudget: budgetMonth.toBudget,
+                    totalIncome: budgetMonth.totalIncome,
+                    totalBudgeted: budgetMonth.totalBudgeted,
+                    incomeAvailable: budgetMonth.incomeAvailable,
+                    forNextMonth: budgetMonth.forNextMonth
+                };
+                console.log(`Hold failed: budgetMonth(${month}) summary=`, JSON.stringify(summary, null, 2), `, amount=${amount}`);
+                const reason = (budgetMonth && budgetMonth.toBudget !== null && budgetMonth.toBudget < amount) ?
                     'Insufficient unallocated income available' :
+                    budgetMonth.toBudget === null ? 'Budget month not initialized - toBudget is null' :
                     'API returned false - insufficient funds to hold';
                 
                 holdResults.push({
@@ -760,11 +781,11 @@ async function generate_month_ahead_report(holdResults) {
                 server_payees = await api.getPayees();
                 transactions = await add_transactions();
                 
+                // Apply holds for income that was marked for next month (before setting budget amounts)
+                const holdResults = await apply_month_ahead_holds();
+                
                 // Now set regular budget amounts (this will allocate remaining income to categories)
                 budgets = await proc_budget_months();
-                
-                // Apply holds for income that was marked for next month
-                const holdResults = await apply_month_ahead_holds();
                 
                 // Generate report
                 await generate_month_ahead_report(holdResults);
