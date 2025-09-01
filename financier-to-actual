@@ -19,9 +19,10 @@ program
     - Month-ahead budgeting: Income marked for next month in Financier will be 
       automatically held for the following month using Actual's hold feature
     - Flag preservation: Financier flags are converted to color names and added
-      to transaction notes as "[Color Flag] original note"
+      to transaction notes as "#<Color>_flag original note" to be compatible
+      with Actual Budget tags.
     - Carryover categories: Categories marked with carryover in Financier will
-      have the carryover flag set in Actual
+      have the carryover flag set in Actual Budget
     
     Note: After import, a report will be generated showing which months had
     income held for the following month, allowing you to verify the import.`)
