@@ -22,7 +22,7 @@ This version includes support for:
 - ✅ **Transactions** - All transactions with notes, flags, and splits
 - ✅ **Budget Amounts** - Monthly budget allocations
 - ✅ **Carryover Settings** - Overspending carryover preferences
-- 📝 **Income Next Month** - Documented for reference (imported as regular income)
+- ✅ **Month-Ahead Income Holds** - Income marked for next month automatically held using Actual Budget's native hold feature
 
 As with anything you find on the internet, use at your own risk. Standard disclaimers apply.
 
@@ -127,18 +127,21 @@ Loading fresh spreadsheet
  ████████████████████████████████████████ 100% | ETA: 0s | 1243/1243
 (Step 5/8) adding transactions
  ████████████████████████████████████████ 100% | ETA: 0s | 11061/11061
-(Step 6/8) documenting income marked for next month
-Found income for next month in 107 month(s) - documenting for reference
+(Step 6/8) applying month-ahead income holds
+Found income for next month in 107 month(s)
+ ████████████████████████████████████████ 100% | ETA: 0s | 107/107
 (Step 7/8) processing budget amounts
  ████████████████████████████████████████ 100% | ETA: 0s | 5861/5861
-(Step 8/8) generating income-for-next-month documentation
+(Step 8/8) generating month-ahead hold results
 
-Income-for-next-month documentation generated: income_next_month_documentation_2025-08-31.md
+Month-ahead holds report generated: month_ahead_holds_report_2025-08-31.md
 
-=== Income Originally Marked for Next Month ===
+=== Month-Ahead Income Holds Results ===
 📊 Found 107 months with income marked for next month
-💰 Total amount: $565,432.10
-📝 All income imported as regular income - see report for details
+✅ Successfully held: 107 months
+❌ Failed to hold: 0 months
+💰 Total amount processed: $534,921.02
+📝 Detailed results available in month_ahead_holds_report_2025-08-31.md
 
 ✅ Import completed successfully!
 ```
@@ -147,20 +150,20 @@ Income-for-next-month documentation generated: income_next_month_documentation_2
 
 After a successful import:
 
-1. **📄 Review the documentation report** - Check `income_next_month_documentation_YYYY-MM-DD.md` for details about income that was originally marked for next month
-2. **🏷️ Verify flags** - Look for transactions with `[Color Flag]` prefixes in their notes  
+1. **📄 Review the hold results report** - Check `month_ahead_holds_report_YYYY-MM-DD.md` for details about income holds applied
+2. **🏷️ Verify flags** - Look for transactions with `#Color_flag` prefixes in their notes  
 3. **📊 Check carryover settings** - Ensure categories have the correct overspending rollover behavior
 4. **💰 Validate budget amounts** - Compare totals with your Financier budget to ensure accuracy
-5. **🔄 Optional month-ahead setup** - If desired, use Actual Budget's "Hold for next month" feature going forward
+5. **🔄 Month-ahead budgeting active** - Income marked for next month in Financier has been automatically held using Actual Budget's hold feature
 
 ### Income for Next Month Handling
 
-This enhanced version takes a **simplified documentation approach** to "Income for Next Month":
+This enhanced version **automatically implements month-ahead budgeting** for "Income for Next Month":
 
-- ✅ **All income imported as regular income** - Available immediately when received
-- 📝 **Comprehensive documentation** - Detailed report shows which income was originally marked for next month
-- 🎯 **No complex monthly tasks** - No ongoing transfers or category management required
-- 💡 **Optional manual adjustments** - Use Actual Budget's hold feature if you want to recreate month-ahead budgeting
+- ✅ **Automatic holds applied** - Income marked for next month in Financier is automatically held for the following month using Actual Budget's built-in hold feature
+- 📝 **Detailed hold results** - Comprehensive report shows which income amounts were successfully held and for which months
+- 🎯 **No manual intervention required** - Month-ahead budgeting is automatically recreated in Actual Budget
+- ✨ **Native Actual Budget behavior** - Uses Actual Budget's standard "Hold for next month" functionality, ensuring compatibility with future updates
 
 ### Flag Preservation Details
 
