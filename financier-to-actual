@@ -529,7 +529,7 @@ async function proc_budget_months() {
         return [month, category_uuid, f2a_id_mappings[category_uuid]]
     }
 
-    console.log("(Step 7/8) processing budget amounts");
+    console.log("(Step 6/8) processing budget amounts");
     
     // month categories have "_m_category_" in their _id parameter
     let month_categories = financier_data.filter((data) => data._id.includes('_m_category_'));
@@ -585,8 +585,8 @@ async function proc_budget_months() {
     }
 }
 
-async function generate_income_next_month_documentation() {
-    console.log("(Step 6/8) documenting income marked for next month");
+async function apply_month_ahead_holds() {
+    console.log("(Step 7/8) applying month-ahead income holds");
     
     const months = Object.keys(incomeForNextMonth).sort();
     if (months.length === 0) {
@@ -594,85 +594,130 @@ async function generate_income_next_month_documentation() {
         return [];
     }
     
-    console.log(`Found income for next month in ${months.length} month(s) - documenting for reference`);
+    console.log(`Found income for next month in ${months.length} month(s)`);
+    const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
+    bar.start(months.length, 0);
     
-    const documentationResults = [];
+    const holdResults = [];
     
     for (const month of months) {
         const amount = incomeForNextMonth[month];
-        documentationResults.push({
-            month,
-            amount,
-            amountInDollars: (amount / 100).toFixed(2),
-            action: 'documented_for_reference'
-        });
+        try {
+            const result = await api.holdBudgetForNextMonth(month, amount);
+            
+            // Check if the hold was successful
+            if (result === true || result === undefined) {
+                holdResults.push({
+                    month,
+                    amount,
+                    status: 'success',
+                    amountInDollars: (amount / 100).toFixed(2)
+                });
+            } else {
+                // Get more detailed error information when hold fails
+                const budgetMonth = await api.getBudgetMonth(month);
+                const reason = budgetMonth.toBudget < amount ?
+                    'Insufficient unallocated income available' :
+                    'API returned false - insufficient funds to hold';
+                
+                holdResults.push({
+                    month,
+                    amount,
+                    status: 'failed',
+                    amountInDollars: (amount / 100).toFixed(2),
+                    reason: reason
+                });
+            }
+        } catch (error) {
+            holdResults.push({
+                month,
+                amount,
+                status: 'error',
+                amountInDollars: (amount / 100).toFixed(2),
+                reason: error.message
+            });
+        }
+        bar.increment();
     }
+    bar.stop();
     
-    return documentationResults;
+    return holdResults;
 }
 
-async function generate_month_ahead_report(documentationResults) {
-    console.log("(Step 8/8) generating income-for-next-month documentation");
+async function generate_month_ahead_report(holdResults) {
+    console.log("(Step 8/8) generating month-ahead hold results");
     
-    if (!documentationResults || documentationResults.length === 0) {
-        console.log("No income-for-next-month data to document.");
+    if (!holdResults || holdResults.length === 0) {
+        console.log("No month-ahead hold operations to report.");
         return;
     }
     
     // Create the report content
-    let reportContent = "# Income for Next Month - Import Documentation\n\n";
+    let reportContent = "# Month-Ahead Income Holds - Import Report\n\n";
     reportContent += `Generated: ${new Date().toISOString()}\n`;
     reportContent += `Budget: ${budget_name}\n\n`;
     
+    const successfulHolds = holdResults.filter(r => r.status === 'success');
+    const failedHolds = holdResults.filter(r => r.status === 'failed' || r.status === 'error');
+    
     reportContent += "## Summary\n\n";
-    reportContent += `- Total months with income marked for next month: ${documentationResults.length}\n`;
-    reportContent += `- Total amount originally marked for future months: $${documentationResults.reduce((sum, r) => sum + r.amount, 0) / 100}\n\n`;
+    reportContent += `- Total months with income marked for next month: ${holdResults.length}\n`;
+    reportContent += `- Successfully held for next month: ${successfulHolds.length}\n`;
+    reportContent += `- Failed to hold: ${failedHolds.length}\n`;
+    reportContent += `- Total amount successfully held: $${successfulHolds.reduce((sum, r) => sum + r.amount, 0) / 100}\n`;
+    if (failedHolds.length > 0) {
+        reportContent += `- Total amount failed to hold: $${failedHolds.reduce((sum, r) => sum + r.amount, 0) / 100}\n`;
+    }
+    reportContent += "\n";
     
-    reportContent += "## Implementation Method\n\n";
-    reportContent += "This import uses a **simplified approach** for handling 'Income for Next Month':\n\n";
-    reportContent += "1. **All income imported as regular income**: Both regular income and incomeNextMonth are imported to the standard Income category\n";
-    reportContent += "2. **Documentation provided**: This report shows which amounts were originally marked for next month in Financier\n";
-    reportContent += "3. **Manual adjustment optional**: You can manually adjust month-ahead amounts in Actual Budget if desired\n\n";
-    
-    reportContent += "## Income Originally Marked for Next Month\n\n";
-    reportContent += "| Month | Amount ($) | Next Month Would Be | Notes |\n";
-    reportContent += "|-------|------------|-------------------|-------|\n";
-    
-    for (const result of documentationResults) {
-        const currentMonthDate = new Date(result.month + '-01');
-        currentMonthDate.setMonth(currentMonthDate.getMonth() + 1);
-        const nextMonth = currentMonthDate.toISOString().substring(0, 7);
+    if (successfulHolds.length > 0) {
+        reportContent += "## Successfully Held for Next Month\n\n";
+        reportContent += "| Month | Amount ($) | Held for Month | Status |\n";
+        reportContent += "|-------|------------|----------------|--------|\n";
         
-        reportContent += `| ${result.month} | $${result.amountInDollars} | ${nextMonth} | Originally marked for next month |\n`;
+        for (const result of successfulHolds) {
+            const currentMonthDate = new Date(result.month + '-01');
+            currentMonthDate.setMonth(currentMonthDate.getMonth() + 1);
+            const nextMonth = currentMonthDate.toISOString().substring(0, 7);
+            
+            reportContent += `| ${result.month} | $${result.amountInDollars} | ${nextMonth} | ✅ Successfully held |\n`;
+        }
+        reportContent += "\n";
     }
     
-    reportContent += "\n## What This Means\n\n";
-    reportContent += "- **No action required**: All income has been imported and is available for budgeting in the month it was received\n";
-    reportContent += "- **Historical accuracy**: This report documents your original Financier month-ahead intentions\n";
-    reportContent += "- **Optional adjustments**: If you want to recreate month-ahead budgeting in Actual Budget, you can:\n";
-    reportContent += "  1. Use Actual Budget's built-in 'Hold for next month' feature\n";
-    reportContent += "  2. Manually budget amounts from the table above in their respective months\n";
-    reportContent += "  3. Or simply continue budgeting normally since all income is now available when received\n\n";
-    
-    reportContent += "## Actual Budget Month-Ahead Feature\n\n";
-    reportContent += "If you want to use month-ahead budgeting going forward:\n";
-    reportContent += "1. In any month's budget view, click the 'To Budget' amount\n";
-    reportContent += "2. Select 'Hold for next month'\n";
-    reportContent += "3. Enter the amount you want to hold\n";
-    reportContent += "4. That amount will become available in the following month's 'To Budget'\n\n";
+    if (failedHolds.length > 0) {
+        reportContent += "## Failed to Hold for Next Month\n\n";
+        reportContent += "| Month | Amount ($) | Status | Reason |\n";
+        reportContent += "|-------|------------|--------|---------|\n";
+        
+        for (const result of failedHolds) {
+            const statusIcon = result.status === 'error' ? '❌' : '⚠️';
+            const reason = result.reason || result.error || 'Unknown error';
+            reportContent += `| ${result.month} | $${result.amountInDollars} | ${statusIcon} Failed | ${reason} |\n`;
+        }
+        reportContent += "\n";
+        
+        reportContent += "### Why Holds Might Fail\n\n";
+        reportContent += "- **Insufficient unallocated income**: The month doesn't have enough 'To Budget' amount available\n";
+        reportContent += "- **Budget already allocated**: Income was already budgeted to categories, leaving insufficient unallocated funds\n";
+        reportContent += "- **API limitations**: Some months may not support holding due to budget state\n\n";
+    }
     
     // Write to file
-    const reportFileName = `income_next_month_documentation_${new Date().toISOString().split('T')[0]}.md`;
+    const reportFileName = `month_ahead_holds_report_${new Date().toISOString().split('T')[0]}.md`;
     fs.writeFileSync(reportFileName, reportContent);
     
-    console.log(`\nIncome-for-next-month documentation generated: ${reportFileName}`);
+    console.log(`\nMonth-ahead holds report generated: ${reportFileName}`);
     
     // Also display a summary in the console
-    console.log("\n=== Income Originally Marked for Next Month ===");
-    const totalAmount = documentationResults.reduce((sum, r) => sum + r.amount, 0);
-    console.log(`📊 Found ${documentationResults.length} months with income marked for next month`);
-    console.log(`💰 Total amount: $${(totalAmount / 100).toFixed(2)}`);
-    console.log(`📝 All income imported as regular income - see ${reportFileName} for details`);
+    console.log("\n=== Month-Ahead Income Holds Results ===");
+    const totalAmount = holdResults.reduce((sum, r) => sum + r.amount, 0);
+    const successCount = holdResults.filter(r => r.status === 'success').length;
+    console.log(`📊 Found ${holdResults.length} months with income marked for next month`);
+    console.log(`✅ Successfully held: ${successCount} months`);
+    console.log(`❌ Failed to hold: ${holdResults.length - successCount} months`);
+    console.log(`💰 Total amount processed: $${(totalAmount / 100).toFixed(2)}`);
+    console.log(`📝 Detailed results available in ${reportFileName}`);
 }
 
 (async () => {
@@ -715,14 +760,14 @@ async function generate_month_ahead_report(documentationResults) {
                 server_payees = await api.getPayees();
                 transactions = await add_transactions();
                 
-                // Document income that was marked for next month (now imported as regular income)
-                const documentationResults = await generate_income_next_month_documentation();
-                
                 // Now set regular budget amounts (this will allocate remaining income to categories)
                 budgets = await proc_budget_months();
                 
+                // Apply holds for income that was marked for next month
+                const holdResults = await apply_month_ahead_holds();
+                
                 // Generate report
-                await generate_month_ahead_report(documentationResults);
+                await generate_month_ahead_report(holdResults);
             }
         );
         console.log("\n✅ Import completed successfully!");
