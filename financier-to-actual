@@ -152,7 +152,7 @@ function addFlagToNotes(notes, flagHex) {
     if (!flagHex) return notes;
     
     const colorName = getColorNameFromHex(flagHex);
-    const flagPrefix = `[${colorName} Flag] `;
+    const flagPrefix = `#${colorName}_flag `;
     
     // If notes is empty or null, just return the flag prefix
     if (!notes || notes === "null") {
