@@ -529,26 +529,59 @@ async function proc_budget_months() {
     }
 
     console.log("(Step 7/8) processing budget amounts");
-    const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
-
+    
     // month categories have "_m_category_" in their _id parameter
     let month_categories = financier_data.filter((data) => data._id.includes('_m_category_'));
-    bar.start(month_categories.length, 0);
+    
+    // First pass: Set all budget amounts
+    console.log("Setting budget amounts...");
+    const bar1 = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
+    bar1.start(month_categories.length, 0);
+    
     for (const mc of month_categories) {
-        // loop through, extract values, and make actual API calls to set budget values
         let month, actual_category;
         [month, , actual_category] = _extract_data(mc._id);
         let value = mc.budget;
-        let carryover = mc.overspending == true;
 
-        // these two API methods set budget information
-        // setBudgetAmount(month month, id categoryId, amount value) → Promise<null>
-        // setBudgetCarryover(month month, id categoryId, bool flag) → Promise<null>
         await api.setBudgetAmount(month, actual_category, value);
-        await api.setBudgetCarryover(month, actual_category, carryover);
-        bar.increment();
+        bar1.increment();
     }
-    bar.stop();
+    bar1.stop();
+    
+    // Second pass: Handle carryover settings
+    console.log("Processing carryover settings...");
+    
+    // Group overspending data by category and find earliest month with overspending
+    const carryoverCategories = {};
+    
+    for (const mc of month_categories) {
+        if (mc.overspending === true) {
+            let month, financier_category_id, actual_category;
+            [month, financier_category_id, actual_category] = _extract_data(mc._id);
+            
+            if (actual_category && !carryoverCategories[actual_category]) {
+                carryoverCategories[actual_category] = {
+                    earliestMonth: month,
+                    financierCategoryId: financier_category_id
+                };
+            } else if (actual_category && month < carryoverCategories[actual_category].earliestMonth) {
+                carryoverCategories[actual_category].earliestMonth = month;
+            }
+        }
+    }
+    
+    // Apply carryover settings from the earliest month (will propagate forward)
+    const carryoverCount = Object.keys(carryoverCategories).length;
+    if (carryoverCount > 0) {
+        console.log(`Found ${carryoverCount} categories with overspending carryover`);
+        
+        for (const [categoryId, data] of Object.entries(carryoverCategories)) {
+            console.log(`Setting carryover for category ${categoryId} starting from ${data.earliestMonth}`);
+            await api.setBudgetCarryover(data.earliestMonth, categoryId, true);
+        }
+    } else {
+        console.log("No categories found with overspending carryover");
+    }
 }
 
 async function generate_income_next_month_documentation() {
